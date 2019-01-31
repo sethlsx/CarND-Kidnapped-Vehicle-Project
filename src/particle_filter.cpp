@@ -30,8 +30,22 @@ void ParticleFilter::init(double x, double y, double theta, double std[]) {
    * NOTE: Consult particle_filter.h for more information about this method 
    *   (and others in this file).
    */
-  num_particles = 0;  // TODO: Set the number of particles
-
+  std::default_random_engine gen;
+  num_particles = 100;  // TODO: Set the number of particles
+  std::normal_distribution<double> gx(x, std[0]);
+  std::normal_distribution<double> gy(y, std[1]);
+  std::normal_distribution<double> gtheta(theta, std[2]);
+  Particle particle;
+  for(int i = 0; i < num_particles; i++){
+    particle.x = gx(gen);
+    particle.y = gy(gen);
+    particle.theta = gtheta(gen);
+    particle.id = i;
+    particle.weight = 1.0;
+    particles.push_back(particle);
+    weights.push_back(1.0);
+  }
+  is_initialized = true;
 }
 
 void ParticleFilter::prediction(double delta_t, double std_pos[], 
@@ -43,6 +57,27 @@ void ParticleFilter::prediction(double delta_t, double std_pos[],
    *  http://en.cppreference.com/w/cpp/numeric/random/normal_distribution
    *  http://www.cplusplus.com/reference/random/default_random_engine/
    */
+  std::default_random_engine gen;
+  double xf, yf, thetaf;
+  for(int i = 0; i < particles.size(); ++i){
+    if(yaw_rate == 0){
+      thetaf = particles[i].theta;
+      xf = particles[i].x + velocity * delta_t * cos(particles[i].theta);
+      yf = particles[i].y + velocity * delta_t * sin(particles[i].theta);
+    }
+    else{
+      thetaf = particles[i].theta + yaw_rate*delta_t;
+      xf = particles[i].x + velocity/yaw_rate*(sin(thetaf) - sin(particles[i].theta));
+      yf = particles[i].y + velocity/yaw_rate*(cos(particles[i].theta) - cos(thetaf));
+    }
+    std::normal_distribution<double> dist_x(xf, std_pos[0]);
+    std::normal_distribution<double> dist_y(yf, std_pos[1]);
+    std::normal_distribution<double> dist_theta(thetaf, std_pos[2]);
+    particles[i].x = dist_x(gen);
+    particles[i].y = dist_y(gen);
+    particles[i].theta = dist_theta(gen);
+
+  }
 
 }
 
@@ -56,7 +91,22 @@ void ParticleFilter::dataAssociation(vector<LandmarkObs> predicted,
    *   probably find it useful to implement this method and use it as a helper 
    *   during the updateWeights phase.
    */
-
+  
+  double distant;
+  //std::cout << "predicted:" << predicted;
+  //std::cout << "observations:" << observations;
+  for(int i = 0; i < observations.size(); ++i){
+    double min = std::numeric_limits<double>::max();
+    int min_index = -1;
+    for(int j = 0; j < predicted.size(); ++j){
+      distant = dist(observations[i].x, observations[i].y, predicted[j].x, predicted[j].y);
+      if(distant < min){
+        min = distant;
+        min_index = predicted[j].id ;
+      }
+    }
+    observations[i].id = min_index;
+  }
 }
 
 void ParticleFilter::updateWeights(double sensor_range, double std_landmark[], 
@@ -75,17 +125,75 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
    *   and the following is a good resource for the actual equation to implement
    *   (look at equation 3.33) http://planning.cs.uiuc.edu/node99.html
    */
-
+  double x_map, y_map;
+  vector<LandmarkObs> predicted, landmarks;
+  LandmarkObs single_predicted, single_landmark;
+  double gauss_norm, exponent, d, lx, ly;
+  //dataAssociation(predicted, observations);
+  for(int i = 0; i < particles.size(); ++i){
+    predicted.clear();
+    for(int j = 0; j < observations.size(); ++j){
+      x_map = particles[i].x + (cos(particles[i].theta)*observations[j].x - sin(particles[i].theta)*observations[j].y);
+      y_map = particles[i].y + (sin(particles[i].theta)*observations[j].x + cos(particles[i].theta)*observations[j].y);
+      single_predicted.x = x_map;
+      single_predicted.y = y_map;
+      single_predicted.id = observations[j].id;
+      predicted.push_back(single_predicted);
+    }
+    landmarks.clear();
+    for(int k = 0; k < map_landmarks.landmark_list.size(); ++k){
+      single_landmark.x = map_landmarks.landmark_list[k].x_f;
+      single_landmark.y = map_landmarks.landmark_list[k].y_f;
+      single_landmark.id = map_landmarks.landmark_list[k].id_i;
+      d = dist(single_landmark.x, single_landmark.y, particles[i].x, particles[i].y);
+      if(d <= sensor_range){
+        landmarks.push_back(single_landmark);
+      }
+    }
+    dataAssociation(landmarks, predicted);
+    particles[i].weight = 1.0;
+    for(int k = 0; k < predicted.size(); ++k){
+      for(int m = 0; m < landmarks.size(); ++m){
+        if(landmarks[m].id == predicted[k].id){
+          lx = landmarks[m].x;
+          ly = landmarks[m].y;
+          break;
+        }
+      }
+      //gauss_norm = ;
+      //std::cout<<"gauss_norm = "<<gauss_norm;
+      //exponent = (pow(predicted[k].x - lx, 2) / (2 * pow(std_landmark[0], 2))) + (pow(predicted[k].y - ly, 2) / (2 * pow(std_landmark[1], 2)));
+      //std::cout<<"exponent = "<<exponent;
+      particles[i].weight *= 1.0 / (2 * M_PI * std_landmark[0] * std_landmark[1]) * exp(-(pow(predicted[k].x - lx, 2) / (2 * pow(std_landmark[0], 2)) + (pow(predicted[k].y - ly, 2) / (2 * pow(std_landmark[1], 2)))));
+      //std::cout<<particles[i].weight<<std::endl; 
+    }
+    weights[i] = particles[i].weight;
+    //std::cout<<"particles "<<i<<" weights: "<<weights[i]<<std::endl;
+  }
+  //std::cout<<"weights:";
+  //for(int n = 0; n < weights.size(); ++n){
+    //std::cout<<" "<<weights[n];
+  //}
 }
 
-void ParticleFilter::resample() {
+void ParticleFilter::resample(){
   /**
    * TODO: Resample particles with replacement with probability proportional 
    *   to their weight. 
    * NOTE: You may find std::discrete_distribution helpful here.
    *   http://en.cppreference.com/w/cpp/numeric/random/discrete_distribution
    */
-
+  std::default_random_engine gen;
+  vector<Particle> particles_temp;
+  std::discrete_distribution<> d(weights.begin(), weights.end());
+  int index;
+  particles_temp.clear();
+  for(int n = 0; n < num_particles; ++n){
+    index = d(gen);
+    particles_temp.push_back(particles[index]);
+  }
+  particles = particles_temp;
+  
 }
 
 void ParticleFilter::SetAssociations(Particle& particle, 
